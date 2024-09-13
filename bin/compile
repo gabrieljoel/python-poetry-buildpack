@@ -25,15 +25,18 @@ for env_file in $BUILDPACK_VARIABLES ; do
     [ -f "$ENV_DIR/$env_file" ] && export "$(basename "$env_file")=$(cat "$ENV_DIR/$env_file" 2>/dev/null)"
 done
 
+# Define the subdirectory where pyproject.toml and poetry.lock are located
+POETRY_DIR="$BUILD_DIR/backend"
+
 POETRY_VERSION="${POETRY_VERSION:-}"
 
 if [ -z "$POETRY_VERSION" ] ; then
-    if [ -f "$BUILD_DIR/poetry.lock" ] ; then
-        POETRY_VERSION=$(head --lines=1 "$BUILD_DIR/poetry.lock" | grep --only-matching '[0-9]\+\.[0-9]\+\.[0-9]\+' || true)
+    if [ -f "$POETRY_DIR/poetry.lock" ] ; then
+        POETRY_VERSION=$(head --lines=1 "$POETRY_DIR/poetry.lock" | grep --only-matching '[0-9]\+\.[0-9]\+\.[0-9]\+' || true)
     fi
     if [ -n "$POETRY_VERSION" ] ; then
         export POETRY_VERSION
-        log "Read Poetry version $POETRY_VERSION from poetry.lock"
+        log "Read Poetry version $POETRY_VERSION from backend/poetry.lock"
     else
         log "No Poetry version specified in POETRY_VERSION config var. Defaulting to latest."
     fi
@@ -50,29 +53,23 @@ log "Add Poetry to the PATH"
 export PATH="/app/.local/bin:$PATH"
 
 if [ "${POETRY_VERSION:0:3}" = "1.2" ] ; then
-    # Allow `poetry export` to work even if we aren't using the Python version that the project will ultimately run in
-    # The problem exists in Poetry version 1.2.0 and has been fixed in https://github.com/python-poetry/poetry/pull/6282
-    # This change is kept for backwards compatibility
     log "Force usage of active Python and disable creation of virtualenvs"
     poetry config virtualenvs.prefer-active-python true | indent
     poetry config virtualenvs.create false | indent
 fi
 
-# Plugin needs to be installed explicitly in future versions of Poetry
 log "Install poetry-plugin-export"
 poetry self add 'poetry-plugin-export@*' | indent
 
-# Disabled warning about manually installing export plugin
-# https://python-poetry.org/blog/announcing-poetry-1.8.0/#removing-poetry-plugin-export-from-the-default-installation
 if [ "${POETRY_VERSION:0:3}" = "1.8" ] ; then
     poetry config warnings.export false
 fi
 
-REQUIREMENTS_FILE="requirements.txt"
+REQUIREMENTS_FILE="$BUILD_DIR/requirements.txt"
 
 log "Export $REQUIREMENTS_FILE from Poetry"
 
-cd "$BUILD_DIR"
+cd "$POETRY_DIR"
 
 EXPORT_PARAMETERS=(--without-hashes --with-credentials)
 
@@ -86,12 +83,10 @@ if [ "${POETRY_EXPORT_DEV_REQUIREMENTS:-0}" != "0" ] ; then
     EXPORT_PARAMETERS+=(--dev)
 fi
 
-# pip can't handle vcs & editable dependencies when requiring hashes (https://github.com/pypa/pip/issues/4995)
-# poetry exports local dependencies as editable by default (https://github.com/python-poetry/poetry/issues/897)
 poetry export -f requirements.txt "${EXPORT_PARAMETERS[@]}" -o "$REQUIREMENTS_FILE.orig" | indent
 sed -e 's/^-e //' < "$REQUIREMENTS_FILE.orig" > "$REQUIREMENTS_FILE" && rm "$REQUIREMENTS_FILE.orig"
 
-RUNTIME_FILE="runtime.txt"
+RUNTIME_FILE="$BUILD_DIR/runtime.txt"
 
 log "Export Python version from Poetry to Heroku $RUNTIME_FILE file"
 
@@ -106,18 +101,11 @@ if [ -f "$RUNTIME_FILE" ] ; then
 fi
 
 if [ -z "${PYTHON_RUNTIME_VERSION:-}" ] ; then
-    log "Read Python version from poetry.lock"
+    log "Read Python version from backend/poetry.lock"
     PYTHON_RUNTIME_VERSION="$(sed -n -e '/^\[metadata\]/,/^\[/p' poetry.lock | sed -n -e 's/^python-versions[[:space:]]*=[[:space:]]*//p' | tr -d \"'[:space:]'\')"
 else
     log "Force Python version to $PYTHON_RUNTIME_VERSION, because PYTHON_RUNTIME_VERSION is set!"
 fi
-
-# Version is only valid if exact interpreter version is specified
-#
-# ^3.8 -> not valid
-# 3.8 -> not valid
-# 3.8.1 -> valid
-# ==3.8.1 -> valid
 
 if [[ "$PYTHON_RUNTIME_VERSION" =~ ^(==)?[2-9](\.[0-9]+){2}$ ]] ; then
     PYTHON_RUNTIME_VERSION=${PYTHON_RUNTIME_VERSION#"=="}

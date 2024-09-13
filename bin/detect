@@ -4,8 +4,8 @@ set -euo pipefail
 
 BUILD_DIR="$1"
 
-if [ ! -f "$BUILD_DIR/poetry.lock" ] ; then
+if [ ! -f "$BUILD_DIR/backend/poetry.lock" ] ; then
     exit 1
 fi
 
-echo "Python Poetry"
+echo "Python Poetry (backend)"
